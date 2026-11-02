@@ -97,19 +97,29 @@ The result is copied to `$HOME/.dsh/cua/dsh-cua-native`, which is where
 `cordis.patch.yml` points it through a `!!js` expression — so the patch itself
 stays machine-independent.
 
-Only step 3 requires Xcode or the Command Line Tools with a Swift 6 toolchain
-(`swift-tools-version: 6.0`). On a machine without them, step 2 is what makes the
-install work.
+Only step 3 requires Xcode or the Command Line Tools. The package declares
+`swift-tools-version: 6.0`, but the vendored sources need **Swift 6.3 or newer**
+to compile in the Swift 6 language mode; with an older toolchain the build stops
+at `sending 'self' risks causing data races` in `SharedHelperServer.swift`. On a
+machine without a recent enough toolchain, step 2 is what makes the install work.
 
 ### Prebuilt helper
 
 `.github/workflows/build-helper.yml` builds the helper in CI and attaches it to
 the GitHub Release for a `v*` tag:
 
-| Asset | Runner | Architecture |
+| Asset | Runner | Build command |
 | --- | --- | --- |
-| `dsh-cua-native-darwin-arm64` (+ `.sha256`) | `macos-15` (arm64) | Apple silicon |
-| `dsh-cua-native-darwin-x86_64` (+ `.sha256`) | `macos-15-intel` (x86_64) | Intel |
+| `dsh-cua-native-darwin-arm64` (+ `.sha256`) | `macos-26` (arm64) | `swift build --arch arm64` |
+| `dsh-cua-native-darwin-x86_64` (+ `.sha256`) | `macos-26` (arm64) | `swift build --arch x86_64` |
+
+Both are cross-compiled on the arm64 runner, so the workflow does not depend on
+GitHub's hosted Intel images, which are being retired; the x86_64 binary is a
+real `Mach-O 64-bit executable x86_64` and is exercised through Rosetta 2 in CI.
+The image is pinned to Xcode 26.6 (Swift 6.3.3) because the Swift 6.2 toolchain
+on the older `macos-15` image rejects this vendored source with `sending 'self'
+risks causing data races`; the workflow fails with an explicit message if the
+runner ever offers only an older Swift.
 
 Each binary is ad-hoc signed (`codesign --force --sign - --identifier
 dsh-cua-native`), the same way a local `swift build` on macOS produces it, so the
