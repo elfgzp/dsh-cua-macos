@@ -137,6 +137,32 @@ a coordinate — absolute pixels from the last screenshot, or `relative: true`
 thousandths of the window size. Actions return `dispatched: true, verified:
 false`, so the agent has to read fresh state to confirm an action landed.
 
+## Quirks found in live use
+
+**Empty `params` objects.** Some models (MiniMax M3.1-Flash among them) encode an
+empty JSON object in a tool call as the *string* `"{}"`. The `cua` schema requires
+`params` to be an object, so those calls fail with:
+
+```
+[{"expected":"object","code":"invalid_type","path":["params"],"message":"Invalid input: expected object, received string"}]
+```
+
+`params` methods that require no arguments (`getCapabilities`, `listApps`) also
+reject a non-empty object, because their schema is strict-empty. The way through
+is a key that adds no own property: `{"method": "getCapabilities", "params": {"__proto__": 1}}`.
+Models that emit proper JSON objects never hit this.
+
+**`getApp` needs a foreground task.** Selecting an application triggers a
+per-application authorization prompt, which is only available in a foreground
+session. A delegated task (subagent, workflow agent) gets:
+
+```
+APP_APPROVAL_UNAVAILABLE: Application approval is unavailable in delegated tasks; ask the main task to perform this operation
+```
+
+So `listApps`, `getCapabilities` and the other read-only methods work anywhere,
+but the first `getApp` for an app has to run in the main session.
+
 ## Known limitations
 
 - Windows support is in development upstream; this bundle is macOS only.
