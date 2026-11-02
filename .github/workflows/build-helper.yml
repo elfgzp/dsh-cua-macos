@@ -4,19 +4,25 @@ name: build-helper
 # push, attach the binaries to the matching GitHub Release so that `reinstall.sh`
 # can download them instead of requiring Xcode.
 #
-# Runner choice is deliberate:
-#   * `macos-15` is the arm64 image; `macos-14` is deprecated and goes away on
-#     2026-11-02, so it is not used.
-#   * `macos-15-intel` is the x86_64 image. Cross-compiling for x86_64 on the
-#     arm64 runner does work with a recent SDK, but building natively on an Intel
-#     runner removes the guesswork about the SDK's x86_64 support, and the Intel
-#     image is an ordinary GitHub-hosted runner. `macos-13` is retired.
-#     GitHub-hosted Intel images are scheduled for retirement in 2027; if that
-#     happens the x86_64 job will fail loudly here and Intel users fall back to
-#     `./reinstall.sh` compiling locally, which is documented in the README.
+# Runner and toolchain choice is deliberate:
+#   * `macos-26` is the arm64 image; `macos-14` is deprecated and goes away on
+#     2026-11-02.
+#   * Both architectures are cross-compiled on that one arm64 runner: the
+#     `--arch x86_64` build was verified to produce a real Mach-O x86_64
+#     executable, and macOS runners can execute it through Rosetta 2, so the
+#     smoke test covers it too. Building x86_64 natively on `macos-15-intel`
+#     would work as well, but GitHub is retiring its hosted Intel images, so
+#     depending on them would make this workflow expire.
+#   * The image pins Xcode 26.6 / Swift 6.3.3. Newer Swift is required, not a
+#     preference: with the Swift 6.2 toolchain from Xcode 26.3 on the macos-15
+#     image the Swift 6 language mode rejects SharedHelperServer.swift:131
+#     ("sending 'self' risks causing data races"), a diagnostic that 6.3 no
+#     longer reports for that code. `native/` is vendored, so the workflow pins
+#     the toolchain instead of editing the sources.
 #
-# Both images ship Xcode 26.x and 16.x; `swift-tools-version: 6.0` needs 16 or
-# newer, and the step below selects the newest one present.
+# If `macos-26` rotates to an image without Xcode 26.6, the step below falls back
+# to the newest Xcode present and the build fails loudly rather than silently
+# shipping a differently-compiled binary.
 
 on:
   push:
@@ -35,7 +41,7 @@ concurrency:
 jobs:
   build:
     name: build ${{ matrix.arch }}
-    runs-on: ${{ matrix.runner }}
+    runs-on: macos-26
     permissions:
       contents: write # needed only by the release step, which is tag-gated below
     strategy:
@@ -43,30 +49,24 @@ jobs:
       matrix:
         include:
           - arch: arm64
-            runner: macos-15
           - arch: x86_64
-            runner: macos-15-intel
 
     steps:
       - uses: actions/checkout@v4
 
-      # `swift-tools-version: 6.0` needs Xcode 16 or newer. Pick the newest Xcode
-      # the image happens to carry, newest first, and only fall back to the image
-      # default; this keeps the job working when runner images rotate versions.
+      # Xcode 26.6 (Swift 6.3.3) is the toolchain this package is verified
+      # against; see the header comment for why 6.2 is not enough. Fall back to
+      # the newest other Xcode only so the failure mode stays readable, and print
+      # the version either way.
       - name: Select Xcode
         run: |
           set -euo pipefail
           for candidate in \
             /Applications/Xcode_26.6.app \
             /Applications/Xcode_26.5.app \
+            /Applications/Xcode_26.4.1.app \
             /Applications/Xcode_26.4.app \
-            /Applications/Xcode_26.3.app \
-            /Applications/Xcode_26.2.app \
-            /Applications/Xcode_26.1.app \
-            /Applications/Xcode_26.0.app \
-            /Applications/Xcode_16.4.app \
-            /Applications/Xcode_16.3.app \
-            /Applications/Xcode_16.2.app; do
+            /Applications/Xcode_26.3.app; do
             if [ -d "$candidate" ]; then
               echo "selecting $candidate"
               sudo xcode-select --switch "$candidate"
@@ -76,6 +76,18 @@ jobs:
           xcode-select -p
           xcodebuild -version
           swift --version
+
+      - name: Check toolchain
+        run: |
+          set -euo pipefail
+          version=$(swift -version 2>&1 | sed -n 's/.*Apple Swift version \([0-9][0-9.]*\).*/\1/p' | head -1)
+          echo "Swift $version"
+          major=$(echo "$version" | cut -d. -f1)
+          minor=$(echo "$version" | cut -d. -f2)
+          if [ "$major" -lt 6 ] || { [ "$major" -eq 6 ] && [ "$minor" -lt 3 ]; }; then
+            echo "::error::Swift 6.3 or newer is required; found $version (see the workflow header)"
+            exit 1
+          fi
 
       # The helper is a helper, not a GUI app, and it is ad-hoc signed when built
       # locally; sign it ad hoc here too so the committed and CI artifacts look
@@ -117,12 +129,22 @@ jobs:
           # that the executable loaded and ran, and that the argument parser is
           # reachable, without needing a GUI session or granted permissions.
           #
+          # Both arches are built on the arm64 runner, so the x86_64 binary needs
+          # Rosetta 2 to run here. It is present on macOS runners; `arch -x86_64`
+          # makes the requirement explicit rather than relying on the kernel
+          # translating transparently.
+          #
           # `swift test` is deliberately not run in CI: the suite drives real AX
           # and ScreenCaptureKit APIs and needs a logged-in GUI session with
           # Accessibility and Screen Recording grants, which a hosted runner does
           # not provide.
+          runner_prefix=""
+          if [ "${{ matrix.arch }}" = "x86_64" ] && [ "$(uname -m)" = "arm64" ]; then
+            runner_prefix="arch -x86_64"
+            /usr/bin/pgrep -q oahd || softwareupdate --install-rosetta --agree-to-license
+          fi
           set +e
-          out=$("./$asset" --ci-smoke-probe yes 2>&1)
+          out=$($runner_prefix "./$asset" --ci-smoke-probe yes 2>&1)
           rc=$?
           set -e
           echo "smoke rc=$rc"
