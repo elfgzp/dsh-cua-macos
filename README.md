@@ -55,9 +55,13 @@ cd dsh-cua-macos
 ./reinstall.sh
 ```
 
-`reinstall.sh` builds the native helper, installs it to
+`reinstall.sh` resolves the native helper, installs it to
 `$HOME/.dsh/cua/dsh-cua-native`, packs the bundle and installs it into the
 profile. Restart DSH afterwards and start a **new** session.
+
+Xcode is only needed when no prebuilt helper is available: `reinstall.sh`
+downloads the arm64 or x86_64 binary from the GitHub Release first and compiles
+from source only if that fails. See [Prebuilt helper](#prebuilt-helper).
 
 The bundle must be installed as a tarball or a git spec. pnpm's `link:` protocol
 does not install a bundle's own dependencies, so a linked checkout would leave
@@ -73,7 +77,12 @@ To install from this repository instead of a local tarball:
 
 `@deepseek-ai/dsh-experimental-cua-macos` ships the Swift sources of the
 `dsh-cua-native` helper but no binary, and the Loader only compiles inside a DSH
-source checkout. `reinstall.sh` therefore builds it:
+source checkout. `reinstall.sh` therefore resolves it, in this order:
+
+1. a helper already present under `native/bin/<platform>-<arch>/`;
+2. the prebuilt binary attached to a GitHub Release (see
+   [Prebuilt helper](#prebuilt-helper));
+3. a local compile:
 
 ```sh
 xcrun swift build \
@@ -84,13 +93,56 @@ xcrun swift build \
   --arch arm64
 ```
 
-and copies the result to `$HOME/.dsh/cua/dsh-cua-native`, which is where
+The result is copied to `$HOME/.dsh/cua/dsh-cua-native`, which is where
 `cordis.patch.yml` points it through a `!!js` expression — so the patch itself
 stays machine-independent.
 
-Requires Xcode or the Command Line Tools with a Swift 6 toolchain. A prebuilt
-arm64 binary is committed under `native/bin/` for convenience; `reinstall.sh`
-rebuilds it for other architectures.
+Only step 3 requires Xcode or the Command Line Tools with a Swift 6 toolchain
+(`swift-tools-version: 6.0`). On a machine without them, step 2 is what makes the
+install work.
+
+### Prebuilt helper
+
+`.github/workflows/build-helper.yml` builds the helper in CI and attaches it to
+the GitHub Release for a `v*` tag:
+
+| Asset | Runner | Architecture |
+| --- | --- | --- |
+| `dsh-cua-native-darwin-arm64` (+ `.sha256`) | `macos-15` (arm64) | Apple silicon |
+| `dsh-cua-native-darwin-x86_64` (+ `.sha256`) | `macos-15-intel` (x86_64) | Intel |
+
+Each binary is ad-hoc signed (`codesign --force --sign - --identifier
+dsh-cua-native`), the same way a local `swift build` on macOS produces it, so the
+CI artifact and a locally compiled helper are interchangeable.
+
+The workflow also runs on `workflow_dispatch` and on every pull request; those
+runs build and verify the helper but do **not** publish, so a broken build is
+caught before a tag is cut. `swift test` is not part of CI: the suite drives real
+Accessibility and ScreenCaptureKit APIs and needs a logged-in GUI session with
+both permissions granted, which a hosted runner does not provide. CI instead
+smoke-tests that the binary executes and can parse its command-line options,
+which happens before any AX call.
+
+`reinstall.sh` uses the release assets when it finds no local helper:
+
+```sh
+./reinstall.sh            # downloads dsh-cua-native-darwin-<arch> for this Mac
+```
+
+It picks `latest` by default; to pin a tag, or to skip the download entirely,
+use the environment overrides:
+
+```sh
+DSH_CUA_HELPER_TAG=v0.1.0 ./reinstall.sh   # a specific release
+DSH_CUA_REPO=you/dsh-cua-macos ./reinstall.sh  # a fork
+DSH_CUA_NO_DOWNLOAD=1 ./reinstall.sh       # always compile locally
+```
+
+The download is verified with the published `.sha256` and by checking the Mach-O
+header against the host architecture. A missing release, a missing checksum or a
+mismatch is reported explicitly and `reinstall.sh` falls back to compiling from
+source — it never installs an unverified binary and never silently skips the
+helper.
 
 `native/` is vendored from `@deepseek-ai/dsh-experimental-cua-macos`; see
 `native/upstream.json` for the per-file provenance and `native/LICENSE.cua-driver`
@@ -195,7 +247,8 @@ but the first `getApp` for an app has to run in the main session.
 
 - Windows support is in development upstream; this bundle is macOS only.
 - No permission page in the Plugin Manager at `0.2.1-rc.5`.
-- The helper is arm64 in the committed artifact; Intel Macs rebuild it.
+- The committed artifact under `native/bin/` is arm64 only; Intel Macs get the
+  `x86_64` helper from the GitHub Release, or compile it with `./reinstall.sh`.
 - The `cua` tool is not scoped to a PTC preset at `0.2.1-rc.5`. The alpha line
   moves it into the PTC generated SDK.
 

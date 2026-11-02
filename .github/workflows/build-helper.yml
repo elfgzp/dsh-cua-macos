@@ -1,0 +1,171 @@
+name: build-helper
+
+# Build the Swift native helper on both supported architectures and, for a tag
+# push, attach the binaries to the matching GitHub Release so that `reinstall.sh`
+# can download them instead of requiring Xcode.
+#
+# Runner choice is deliberate:
+#   * `macos-15` is the arm64 image; `macos-14` is deprecated and goes away on
+#     2026-11-02, so it is not used.
+#   * `macos-15-intel` is the x86_64 image. Cross-compiling for x86_64 on the
+#     arm64 runner does work with a recent SDK, but building natively on an Intel
+#     runner removes the guesswork about the SDK's x86_64 support, and the Intel
+#     image is an ordinary GitHub-hosted runner. `macos-13` is retired.
+#     GitHub-hosted Intel images are scheduled for retirement in 2027; if that
+#     happens the x86_64 job will fail loudly here and Intel users fall back to
+#     `./reinstall.sh` compiling locally, which is documented in the README.
+#
+# Both images ship Xcode 26.x and 16.x; `swift-tools-version: 6.0` needs 16 or
+# newer, and the step below selects the newest one present.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-helper-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: build ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: write # needed only by the release step, which is tag-gated below
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+          - arch: x86_64
+            runner: macos-15-intel
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # `swift-tools-version: 6.0` needs Xcode 16 or newer. Pick the newest Xcode
+      # the image happens to carry, newest first, and only fall back to the image
+      # default; this keeps the job working when runner images rotate versions.
+      - name: Select Xcode
+        run: |
+          set -euo pipefail
+          for candidate in \
+            /Applications/Xcode_26.6.app \
+            /Applications/Xcode_26.5.app \
+            /Applications/Xcode_26.4.app \
+            /Applications/Xcode_26.3.app \
+            /Applications/Xcode_26.2.app \
+            /Applications/Xcode_26.1.app \
+            /Applications/Xcode_26.0.app \
+            /Applications/Xcode_16.4.app \
+            /Applications/Xcode_16.3.app \
+            /Applications/Xcode_16.2.app; do
+            if [ -d "$candidate" ]; then
+              echo "selecting $candidate"
+              sudo xcode-select --switch "$candidate"
+              break
+            fi
+          done
+          xcode-select -p
+          xcodebuild -version
+          swift --version
+
+      # The helper is a helper, not a GUI app, and it is ad-hoc signed when built
+      # locally; sign it ad hoc here too so the committed and CI artifacts look
+      # the same to Gatekeeper and to code that inspects code signatures.
+      - name: Build helper
+        run: |
+          set -euo pipefail
+          xcrun swift build \
+            --package-path native \
+            --scratch-path "$PWD/native/.build/ci-${{ matrix.arch }}" \
+            --configuration release \
+            --product dsh-cua-native \
+            --arch "${{ matrix.arch }}"
+          bin_dir=$(xcrun swift build \
+            --package-path native \
+            --scratch-path "$PWD/native/.build/ci-${{ matrix.arch }}" \
+            --configuration release \
+            --arch "${{ matrix.arch }}" \
+            --show-bin-path)
+          echo "BIN_DIR=$bin_dir" >> "$GITHUB_ENV"
+          cp "$bin_dir/dsh-cua-native" "dsh-cua-native-darwin-${{ matrix.arch }}"
+          chmod 755 "dsh-cua-native-darwin-${{ matrix.arch }}"
+          codesign --force --sign - --identifier dsh-cua-native \
+            "dsh-cua-native-darwin-${{ matrix.arch }}"
+
+      - name: Verify helper
+        run: |
+          set -euo pipefail
+          asset="dsh-cua-native-darwin-${{ matrix.arch }}"
+          echo "== file =="
+          file "$asset"
+          echo "== codesign =="
+          codesign -dv --verbose=2 "$asset" 2>&1 || true
+          # Fail the job if the wrong architecture came out of the build.
+          lipo -info "$asset" | grep -q "${{ matrix.arch }}"
+
+          # Runtime smoke test: the helper parses its options before it touches
+          # any AX or ScreenCaptureKit API. An unknown option therefore proves
+          # that the executable loaded and ran, and that the argument parser is
+          # reachable, without needing a GUI session or granted permissions.
+          #
+          # `swift test` is deliberately not run in CI: the suite drives real AX
+          # and ScreenCaptureKit APIs and needs a logged-in GUI session with
+          # Accessibility and Screen Recording grants, which a hosted runner does
+          # not provide.
+          set +e
+          out=$("./$asset" --ci-smoke-probe yes 2>&1)
+          rc=$?
+          set -e
+          echo "smoke rc=$rc"
+          echo "smoke out=$out"
+          [ "$rc" -eq 1 ]
+          printf '%s' "$out" | grep -q "Unknown helper option"
+          echo "smoke OK: helper ran and rejected an unknown option as expected"
+
+      - name: Compute checksum
+        run: |
+          set -euo pipefail
+          asset="dsh-cua-native-darwin-${{ matrix.arch }}"
+          shasum -a 256 "$asset" | tee "$asset.sha256"
+          echo "ASSET=$asset" >> "$GITHUB_ENV"
+          {
+            echo "### dsh-cua-native ${{ matrix.arch }}"
+            echo ""
+            echo '```'
+            cat "$asset.sha256"
+            echo '```'
+            echo ""
+            ls -l "$asset"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-cua-native-darwin-${{ matrix.arch }}
+          path: |
+            dsh-cua-native-darwin-${{ matrix.arch }}
+            dsh-cua-native-darwin-${{ matrix.arch }}.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+      # Only a tag push publishes. Pull requests and manual dispatches build and
+      # verify, so a broken helper is caught before a tag is cut.
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dsh-cua-native-darwin-${{ matrix.arch }}
+            dsh-cua-native-darwin-${{ matrix.arch }}.sha256
+          fail_on_unmatched_files: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
