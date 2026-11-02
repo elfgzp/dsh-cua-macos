@@ -1,0 +1,8 @@
+# Swift build cache
+native/.build/
+
+# Packed tarballs produced by npm pack
+dist/
+
+node_modules/
+.DS_Store

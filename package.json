@@ -1,0 +1,50 @@
+{
+  "name": "dsh-cua-macos",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "MIT",
+  "description": "macOS Computer Use for DeepSeek Harness: read accessibility trees, capture screenshots and drive real desktop apps. Pinned to the profile's 0.2.1-rc.5 line with a locally compiled native helper.",
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "cordis",
+    "computer-use",
+    "cua",
+    "macos",
+    "accessibility"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/elfgzp/dsh-cua-macos.git"
+  },
+  "homepage": "https://github.com/elfgzp/dsh-cua-macos#readme",
+  "bugs": {
+    "url": "https://github.com/elfgzp/dsh-cua-macos/issues"
+  },
+  "engines": {
+    "dsh": ">=0.2.0"
+  },
+  "exports": {
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md"
+  ],
+  "dependencies": {
+    "@deepseek-ai/dsh-attachment": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-computer-use": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-cua": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-experimental-cua-macos": "0.2.1-rc.5",
+    "@deepseek-ai/dsh-user-questions": "0.2.1-rc.5"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

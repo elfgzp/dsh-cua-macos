@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Computer Use (macOS)",
+    "description": "Lets the agent read macOS accessibility trees, capture screenshots and drive real desktop apps through a locally compiled native helper."
+  }
+}

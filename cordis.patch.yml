@@ -1,0 +1,38 @@
+# dsh-cua-macos bundle patch
+#
+# macOS Computer Use, pinned to the profile's DSH 0.2.1-rc.5 line.
+#
+# The official bundle (@deepseek-ai/dsh-cua-bundle) only ships on the 0.2.2-alpha
+# channel, which needs cordis ~4.0.6-alpha.1, while this profile runs 0.2.1-rc.5 on
+# cordis 4.0.5. The three component packages are published on both lines, so this
+# bundle mounts the same rows at the versions that match the shipped runtime:
+#
+#   cua-provider-registry -> the exclusive computer-use provider slot
+#   cua                   -> macOS native provider (AX tree, screenshots, input)
+#
+# The shared package `@deepseek-ai/dsh-cua` is deliberately NOT mounted as its own
+# row here: at 0.2.1-rc.5 it exports only `CuaConfig` and `installCua` and has no
+# `apply`, so the Loader cannot mount it as a plugin. The macOS provider imports it
+# as a library and calls `installCua` itself. The 0.2.2-alpha line does export an
+# `apply` (a Host marker for the optional Client half) and does need its own row.
+#
+# At 0.2.1-rc.5 the shared package registers `cua` as an ordinary model tool, so no
+# PTC preset is required. The 0.2.2-alpha line moves it into the PTC generated SDK
+# and adds the permission page; those need the alpha channel.
+#
+# The npm tarball of the provider carries the Swift sources but no prebuilt helper,
+# and the Loader only compiles inside a DSH source checkout. So the helper is built
+# separately and pointed at through `helperPath`. The path is resolved from $HOME
+# so this bundle stays machine-independent; ./reinstall.sh puts the helper there.
+
+- insert:
+    - id: cua-provider-registry
+      name: '@deepseek-ai/dsh-computer-use'
+
+    - id: cua
+      name: '@deepseek-ai/dsh-experimental-cua-macos'
+      disabled: !!js process.platform !== 'darwin'
+      config:
+        # Absolute path to the compiled native helper, installed by ./reinstall.sh
+        # to $HOME/.dsh/cua/dsh-cua-native.
+        helperPath: !!js "process.env.HOME + '/.dsh/cua/dsh-cua-native'"

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Computer Use（macOS）",
+    "description": "让 Agent 读取 macOS 辅助功能树、截屏并操作真实桌面应用，native helper 在本地编译。"
+  }
+}
