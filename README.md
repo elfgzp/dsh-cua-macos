@@ -137,6 +137,34 @@ a coordinate — absolute pixels from the last screenshot, or `relative: true`
 thousandths of the window size. Actions return `dispatched: true, verified:
 false`, so the agent has to read fresh state to confirm an action landed.
 
+## Reading the accessibility tree
+
+`getState` returns the tree for one application. Two things about its shape are
+worth knowing:
+
+- **The top-level `windowId` can be `null`.** For an app without a normal
+  window (Finder is one), the useful ids live in the `windows[]` array instead —
+  pass one of those to `screenshot`. Windows with `isOnScreen: false` still
+  capture correctly.
+- **The tree is application-scoped, not window-scoped.** For Finder that means
+  the menu-bar items plus an `AXScrollArea` named "桌面" (disabled) that holds
+  the desktop's own elements. Menu-bar contents are omitted unless you pass
+  `includeMenus: true`.
+
+## Application approval
+
+The first time a task selects an application, the Host asks the human:
+
+> Allow Computer Use to launch if needed, read, capture, and control <app>?
+
+with **Allow for this task**, **Deny** and **Always allow** (the last one only
+when the app identity is persistable). The answer is per session unless it is
+saved, and a saved grant lives in the provider's `allowedApps` config.
+
+This prompt needs a human answerer, so it only works in a foreground session —
+a delegated task (subagent, workflow agent) gets `APP_APPROVAL_UNAVAILABLE`
+instead and must be handed back to the main task.
+
 ## Quirks found in live use
 
 **Empty `params` objects.** Some models (MiniMax M3.1-Flash among them) encode an
